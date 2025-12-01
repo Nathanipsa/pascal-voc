@@ -232,13 +232,11 @@ val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False)
 model = fn.CBAM_UNet(n_channels=3, n_classes=num_classes).to(DEVICE)
 
 # --- INIT ---
-# ... (votre code existant pour loader et model) ...
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-2) # Reset LR à 1e-3
+optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
 
-# Scheduler
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-    optimizer, mode='max', factor=0.5, patience=4, verbose=True
+    optimizer, mode='max', factor=0.5, patience=10, verbose=True
 )
 
 # --- DEFINITION DES PERTES ---
@@ -286,7 +284,6 @@ while training_active:
 
         # Pour l'affichage dans le print, on garde la valeur brute
         loss = total_loss
-        loss.backward()
 
         # 4. Optimization
         if global_step % accumulation_steps == 0:
