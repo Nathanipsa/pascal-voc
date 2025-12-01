@@ -163,6 +163,41 @@ class VOCDataset(Dataset):
         return torch.from_numpy(img), torch.from_numpy(mask).long()
 
 
+class DiceLoss(nn.Module):
+    def __init__(self, n_classes):
+        super(DiceLoss, self).__init__()
+        self.n_classes = n_classes
+
+    def _one_hot_encoder(self, input_tensor):
+        tensor_list = []
+        for i in range(self.n_classes):
+            temp_prob = input_tensor == i
+            tensor_list.append(temp_prob.unsqueeze(1))
+        output_tensor = torch.cat(tensor_list, dim=1)
+        return output_tensor.float()
+
+    def forward(self, inputs, target, weight=None, softmax=False):
+        if softmax:
+            inputs = torch.softmax(inputs, dim=1)
+
+        # Target : (B, H, W) -> One hot : (B, C, H, W)
+        target = self._one_hot_encoder(target)
+
+        if inputs.size() != target.size():
+            target = nn.functional.interpolate(target, size=inputs.shape[2:], mode='nearest')
+
+        # Intersection and Union
+        smooth = 1e-5
+        intersection = inputs * target
+
+        dice_part = (2. * intersection.sum(dim=(2, 3)) + smooth) / (
+                    inputs.sum(dim=(2, 3)) + target.sum(dim=(2, 3)) + smooth)
+
+        # Dice Loss = 1 - Dice Score moyen
+        return 1 - dice_part.mean()
+
+
+
 def compute_iou(pred, target, n_classes=21):
     ious = []
     pred = pred.view(-1)
@@ -196,15 +231,24 @@ val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False)
 # Model
 model = fn.CBAM_UNet(n_channels=3, n_classes=num_classes).to(DEVICE)
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+# --- INIT ---
+# ... (votre code existant pour loader et model) ...
 
-# ReduceLROnPlateau keeps track of the validation mIoU and reduces the learning rate when it plateaus
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-2) # Reset LR à 1e-3
+
+# Scheduler
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-    optimizer, mode='max', factor=0.5, patience=1000, verbose=True
-    # mode='max' as we want to maximize the validation mIoU
+    optimizer, mode='max', factor=0.5, patience=4, verbose=True
 )
 
-criterion = nn.CrossEntropyLoss(ignore_index=255)
+# --- DEFINITION DES PERTES ---
+# 1. Cross Entropy : On garde un poids léger sur le fond (0.4) pour la stabilité
+class_weights = torch.ones(num_classes).to(DEVICE)
+class_weights[0] = 0.4
+criterion_ce = nn.CrossEntropyLoss(weight=class_weights, ignore_index=255)
+
+# 2. Dice Loss : Pour la précision des formes
+criterion_dice = DiceLoss(n_classes=num_classes)
 
 if not os.path.isdir(model_save_path):
     os.makedirs(model_save_path)
@@ -230,7 +274,18 @@ while training_active:
         outputs = model(inputs)
 
         # 3. Loss & Backward
-        loss = criterion(outputs, targets) / accumulation_steps
+        loss_ce = criterion_ce(outputs, targets)
+        loss_dice = criterion_dice(outputs, targets, softmax=True)
+
+        # On combine : CE stabilise le début, Dice affine la fin.
+        # Vous pouvez ajuster les coefficients, mais 0.5/0.5 est un standard robuste.
+        total_loss = (0.5 * loss_ce + 0.5 * loss_dice)
+
+        # Division par accumulation_steps car on est dans la boucle d'accumulation
+        (total_loss / accumulation_steps).backward()
+
+        # Pour l'affichage dans le print, on garde la valeur brute
+        loss = total_loss
         loss.backward()
 
         # 4. Optimization
