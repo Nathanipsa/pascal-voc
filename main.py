@@ -76,7 +76,7 @@ class Augmenter:
         if np.random.random() < 0.8:
             image = self.color_jitter(image)
         if np.random.random() < 0.2:
-            image = self.add_noise(image)
+            image = self.elastic_transform(image)
         return image, mask
 
     def horizontal_flip(self, img, mask):
@@ -119,13 +119,17 @@ class Augmenter:
         img = np.clip(img, 0, 255).astype(np.uint8)
         return img
 
-    def add_noise(self, img):
-        mean = 0
-        sigma = np.random.uniform(5, 20)
-        gauss = np.random.normal(mean, sigma, img.shape).astype(np.float32)
-        noisy = img.astype(np.float32) + gauss
-        return np.clip(noisy, 0, 255).astype(np.uint8)
-
+    def elastic_transform(self, image, mask, alpha=100, sigma=10):
+        # Simulation simple de déformation élastique via bruit gaussien sur les coordonnées
+        # Nécessite scipy.ndimage (import à ajouter si vous l'avez, sinon sautez cette fonction)
+        # Pour faire simple sans scipy, on peut faire un shift simple :
+        tx = np.random.randint(-10, 10)
+        ty = np.random.randint(-10, 10)
+        M = np.float32([[1, 0, tx], [0, 1, ty]])
+        rows, cols = image.shape[:2]
+        img_shift = cv2.warpAffine(image, M, (cols, rows), borderValue=(0, 0, 0))
+        mask_shift = cv2.warpAffine(mask, M, (cols, rows), flags=cv2.INTER_NEAREST, borderValue=255)
+        return img_shift, mask_shift
 
 augmenter = Augmenter(size=256)
 
@@ -233,10 +237,10 @@ model = fn.CBAM_UNet(n_channels=3, n_classes=num_classes).to(DEVICE)
 
 # --- INIT ---
 
-optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
+optimizer = torch.optim.SGD(model.parameters(), lr=0.005, momentum=0.9, weight_decay=1e-3)
 
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-    optimizer, mode='max', factor=0.5, patience=10, verbose=True
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer, T_max=num_training_steps, eta_min=1e-6
 )
 
 # --- DEFINITION DES PERTES ---
@@ -289,6 +293,7 @@ while training_active:
         if global_step % accumulation_steps == 0:
             optimizer.step()
             optimizer.zero_grad()
+            scheduler.step()
 
         # 5. Logging
         if global_step % 100 == 0:
@@ -314,9 +319,6 @@ while training_active:
 
             avg_miou = np.nanmean(miou_list) * 100
             print(f"Validation mIoU: {avg_miou:.2f}% (Best: {best_miou:.2f}%)")
-
-            # Update Scheduler with validation mIoU
-            scheduler.step(avg_miou)
 
             # Save Checkpoint
             torch.save(model.state_dict(), f"{model_save_path}/model_last.pt")
