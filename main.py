@@ -13,6 +13,8 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Device: {DEVICE}")
 
 # Hyperparameters
+brestore = True
+restore_iter = 0
 num_training_steps = 30000
 learning_rate = 1e-3
 weight_decay = 1e-2
@@ -35,6 +37,18 @@ val_interval = 500
 best_miou = 0.0
 patience = 20
 patience_counter = 0
+
+if brestore:
+    path = f"{model_save_path}/best_model.pt"
+    
+    if os.path.exists(path):
+        pretrained_dict = torch.load(path)
+        model_dict = model.state_dict()
+        
+        # Mise à jour
+        model_dict.update(pretrained_dict)
+        model.load_state_dict(model_dict)
+
 
 
 # --- UTILS & DATASET ---
@@ -76,7 +90,7 @@ class Augmenter:
         if np.random.random() < 0.8:
             image = self.color_jitter(image)
         if np.random.random() < 0.2:
-            image = self.elastic_transform(image)
+            image, mask = self.elastic_transform(image, mask)
         return image, mask
 
     def horizontal_flip(self, img, mask):
