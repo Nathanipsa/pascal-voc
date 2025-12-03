@@ -38,18 +38,6 @@ best_miou = 0.0
 patience = 20
 patience_counter = 0
 
-if brestore:
-    path = f"{model_save_path}/best_model.pt"
-    
-    if os.path.exists(path):
-        pretrained_dict = torch.load(path)
-        model_dict = model.state_dict()
-        
-        # Mise à jour
-        model_dict.update(pretrained_dict)
-        model.load_state_dict(model_dict)
-
-
 
 # --- UTILS & DATASET ---
 
@@ -274,6 +262,17 @@ print("Starting training...")
 optimizer.zero_grad()
 global_step = 0
 training_active = True
+
+if brestore:
+    path = f"{model_save_path}/best_model.pt"
+    
+    if os.path.exists(path):
+        pretrained_dict = torch.load(path)
+        model_dict = model.state_dict()
+        
+        # Mise à jour
+        model_dict.update(pretrained_dict)
+        model.load_state_dict(model_dict)
 
 # We go as long as training is active (i.e. patience counter is lower than patience and it is lower
 while training_active:
