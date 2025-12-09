@@ -108,6 +108,7 @@ def validate():
 
     model.eval()
     miou_list = []
+    pixel_acc_list = []
     
     print("Lancement de l'inférence avec TTA (Miroir)...")
     
@@ -138,6 +139,9 @@ def validate():
             # Score
             score = compute_iou(pred_mask, v_tar, n_classes=num_classes)
             miou_list.append(score)
+
+            p_acc = compute_pixel_acc(pred_mask, v_tar)
+            pixel_acc_list.append(p_acc) # Add to list
             
             if i % 50 == 0:
                 print(f"Image {i}/{len(val_imgs)} traitée...")
@@ -149,8 +153,8 @@ def validate():
     print("-" * 30)
 
     # ... après le calcul du mIoU ...
-    p_acc = compute_pixel_acc(pred_mask, v_tar)
-    print(f"Pixel Acc: {p_acc * 100:.2f}%")
+    final_pixel_acc = np.mean(pixel_acc_list) * 100
+    print(f"Pixel Accuracy avec TTA : {final_pixel_acc:.4f}%")
 
 
 if __name__ == "__main__":
