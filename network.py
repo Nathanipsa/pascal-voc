@@ -7,8 +7,8 @@ class ChannelAttention(nn.Module):
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.max_pool = nn.AdaptiveMaxPool2d(1)
 
-        # MLP partagé pour traiter les deux poolings
-        # On réduit la dimension puis on la restaure (bottleneck)
+        # Shared MLP
+        # Bottleneck structure
         self.fc1 = nn.Conv2d(in_planes, in_planes // ratio, 1, bias=False)
         self.relu1 = nn.ReLU()
         self.fc2 = nn.Conv2d(in_planes // ratio, in_planes, 1, bias=False)
@@ -18,7 +18,7 @@ class ChannelAttention(nn.Module):
     def forward(self, x):
         avg_out = self.fc2(self.relu1(self.fc1(self.avg_pool(x))))
         max_out = self.fc2(self.relu1(self.fc1(self.max_pool(x))))
-        # Somme des résultats puis activation sigmoïde
+        # Sum the two attention maps
         out = avg_out + max_out
         return self.sigmoid(out)
 
@@ -26,13 +26,13 @@ class ChannelAttention(nn.Module):
 class SpatialAttention(nn.Module):
     def __init__(self, kernel_size=7):
         super(SpatialAttention, self).__init__()
-        # Convolution sur 2 canaux (AvgPool + MaxPool concaténés)
-        # Kernel size 7 est standard pour capturer une zone spatiale large
+        # Convolution on 2 channels (AvgPool + MaxPool concatenated)
+        # Kernel size 7 is standard to capture a wide spatial area
         self.conv1 = nn.Conv2d(2, 1, kernel_size, padding=kernel_size // 2, bias=False)
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
-        # Moyenne et Max sur l'axe des canaux (dim=1)
+        # Mean and Max along channel axis
         avg_out = torch.mean(x, dim=1, keepdim=True)
         max_out, _ = torch.max(x, dim=1, keepdim=True)
         x_cat = torch.cat([avg_out, max_out], dim=1)
@@ -47,7 +47,7 @@ class CBAM(nn.Module):
         self.sa = SpatialAttention(kernel_size)
 
     def forward(self, x):
-        # Application séquentielle : Channel puis Spatial
+        # Apply Channel Attention followed by Spatial Attention
         out = x * self.ca(x)
         out = out * self.sa(out)
         return out
@@ -55,15 +55,15 @@ class CBAM(nn.Module):
 class DoubleConvCBAM(nn.Module):
     """
     (Convolution => [BN] => ReLU) * 2
-    Le 'padding=1' est CRUCIAL ici pour garder la taille 256x256
-    tout au long du réseau, sinon l'image rétrécit à chaque couche.
+    Padding=1 is CRUCIAL here to keep the size 256x256
+    throughout the network, otherwise the image shrinks at each layer.
     """
 
     def __init__(self, in_channels, out_channels):
         super().__init__()
         self.double_conv = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-            nn.BatchNorm2d(out_channels),  # Aide à la convergence rapide
+            nn.BatchNorm2d(out_channels),  # Helps with faster convergence
             nn.ReLU(inplace=True),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
             nn.BatchNorm2d(out_channels),
@@ -84,15 +84,14 @@ class CBAM_UNet(nn.Module):
         self.n_classes = n_classes
 
         # --- ENCODER (Contracting Path) ---
-        # On augmente le nombre de filtres progressivement
+        # Increasing the number of filters progressively
         self.inc = DoubleConvCBAM(n_channels, 64)
         self.down1 = nn.Sequential(nn.MaxPool2d(2), DoubleConvCBAM(64, 128))
         self.down2 = nn.Sequential(nn.MaxPool2d(2), DoubleConvCBAM(128, 256))
         self.down3 = nn.Sequential(nn.MaxPool2d(2), DoubleConvCBAM(256, 512))
 
         # --- BOTTLENECK ---
-        # C'est ici que la représentation est la plus compressée
-        # Dropout ajouté pour réduire l'overfitting (critique pour petit dataset)
+        # Dropout added to reduce overfitting
         self.down4 = nn.Sequential(
             nn.MaxPool2d(2),
             DoubleConvCBAM(512, 1024),
@@ -100,9 +99,9 @@ class CBAM_UNet(nn.Module):
         )
 
         # --- DECODER (Expansive Path) ---
-        # On utilise ConvTranspose2d pour l'upsampling (opération inverse de la convolution)
+        # Using ConvTranspose2d for upsampling (inverse operation of convolution)
         self.up1 = nn.ConvTranspose2d(1024, 512, kernel_size=2, stride=2)
-        self.conv_up1 = DoubleConvCBAM(1024, 512)  # 1024 car on concatène 512 (skip) + 512 (up)
+        self.conv_up1 = DoubleConvCBAM(1024, 512)  # 1024 because we concatenate 512 (skip) + 512 (up)
 
         self.up2 = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2)
         self.conv_up2 = DoubleConvCBAM(512, 256)
@@ -114,21 +113,21 @@ class CBAM_UNet(nn.Module):
         self.conv_up4 = DoubleConvCBAM(128, 64)
 
         # --- OUTPUT LAYER ---
-        # Convolution 1x1 pour mapper vers le nombre de classes (21 pour VOC)
+        # Convolution 1x1 to map to the number of classes
         self.outc = nn.Conv2d(64, n_classes, kernel_size=1)
 
     def forward(self, x):
-        # Encodage et sauvegarde des résidus (skip connections)
+        # Encoding and saving residuals (skip connections)
         x1 = self.inc(x)
         x2 = self.down1(x1)
         x3 = self.down2(x2)
         x4 = self.down3(x3)
         x5 = self.down4(x4)
 
-        # Décodage avec concaténation
+        # Decoding with concatenation
         x = self.up1(x5)
-        # On concatène la sortie de l'upsampling avec le résidu de l'encodeur (x4)
-        # C'est ça qui donne la précision des frontières à U-Net
+        # We concatenate the output of the upsampling with the encoder residual (x4)
+        # This is what gives U-Net its boundary precision
         x = torch.cat([x4, x], dim=1)
         x = self.conv_up1(x)
 

@@ -13,10 +13,10 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Device: {DEVICE}")
 
 # Hyperparameters
-brestore = True
+brestore = False
 restore_iter = 0
-num_training_steps = 30000
-learning_rate = 1e-3
+num_training_steps = 10000
+learning_rate = 5e-3
 weight_decay = 1e-2
 batch_size = 8
 accumulation_steps = 2
@@ -43,7 +43,7 @@ patience_counter = 0
 
 def get_custom_lists(img_dir, mask_dir):
     if not os.path.exists(img_dir) or not os.path.exists(mask_dir):
-        raise FileNotFoundError(f"Dossiers introuvables: {img_dir}")
+        raise FileNotFoundError(f"File not found : {img_dir}")
 
     valid_extensions = ('.jpg', '.jpeg', '.png', '.bmp')
     all_files = sorted(os.listdir(img_dir))
@@ -122,9 +122,9 @@ class Augmenter:
         return img
 
     def elastic_transform(self, image, mask, alpha=100, sigma=10):
-        # Simulation simple de déformation élastique via bruit gaussien sur les coordonnées
-        # Nécessite scipy.ndimage (import à ajouter si vous l'avez, sinon sautez cette fonction)
-        # Pour faire simple sans scipy, on peut faire un shift simple :
+
+        # Generate random displacement fields using Gaussian filters
+
         tx = np.random.randint(-10, 10)
         ty = np.random.randint(-10, 10)
         M = np.float32([[1, 0, tx], [0, 1, ty]])
@@ -222,6 +222,17 @@ def compute_iou(pred, target, n_classes=21):
             ious.append(intersection / union)
     return np.nanmean(ious)
 
+def compute_pixel_acc(pred, target):
+    # Ignoring the 255 label (borders)
+    valid_mask = target != 255
+    correct = (pred[valid_mask] == target[valid_mask]).sum().item()
+    total = valid_mask.sum().item()
+    if total == 0:
+        return 0
+    return correct / total
+
+
+
 
 # --- INIT ---
 train_imgs, train_masks = get_custom_lists(train_img_dir, train_mask_dir)
@@ -239,19 +250,19 @@ model = fn.CBAM_UNet(n_channels=3, n_classes=num_classes).to(DEVICE)
 
 # --- INIT ---
 
-optimizer = torch.optim.SGD(model.parameters(), lr=0.005, momentum=0.9, weight_decay=1e-3)
+optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-3)
 
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
     optimizer, T_max=num_training_steps, eta_min=1e-6
 )
 
-# --- DEFINITION DES PERTES ---
-# 1. Cross Entropy : On garde un poids léger sur le fond (0.4) pour la stabilité
+# --- Loss definition ---
+# 1. Cross Entropy : Small weighting to favor foreground classes ("removes" the background dominance)
 class_weights = torch.ones(num_classes).to(DEVICE)
 class_weights[0] = 0.4
 criterion_ce = nn.CrossEntropyLoss(weight=class_weights, ignore_index=255)
 
-# 2. Dice Loss : Pour la précision des formes
+# 2. Dice Loss : For shape precision
 criterion_dice = DiceLoss(n_classes=num_classes)
 
 if not os.path.isdir(model_save_path):
@@ -270,11 +281,14 @@ if brestore:
         pretrained_dict = torch.load(path)
         model_dict = model.state_dict()
         
-        # Mise à jour
+        # Update
         model_dict.update(pretrained_dict)
         model.load_state_dict(model_dict)
 
+
+
 # We go as long as training is active (i.e. patience counter is lower than patience and it is lower
+
 while training_active:
 
     for batch_img, batch_mask in train_loader:
@@ -292,14 +306,13 @@ while training_active:
         loss_ce = criterion_ce(outputs, targets)
         loss_dice = criterion_dice(outputs, targets, softmax=True)
 
-        # On combine : CE stabilise le début, Dice affine la fin.
-        # Vous pouvez ajuster les coefficients, mais 0.5/0.5 est un standard robuste.
+        # We combine the two losses
         total_loss = (0.5 * loss_ce + 0.5 * loss_dice)
 
-        # Division par accumulation_steps car on est dans la boucle d'accumulation
+        # Accumulation gradient for memory efficiency
         (total_loss / accumulation_steps).backward()
 
-        # Pour l'affichage dans le print, on garde la valeur brute
+        # For logging in the print, we keep the raw value
         loss = total_loss
 
         # 4. Optimization
@@ -318,6 +331,7 @@ while training_active:
             print('Validation...')
             model.eval()
             miou_list = []
+            pixel_acc_list = []
 
             with torch.no_grad():
                 for v_img, v_mask in val_loader:
@@ -330,8 +344,12 @@ while training_active:
                     score = compute_iou(pred_mask, v_tar, n_classes=num_classes)
                     miou_list.append(score)
 
+                    p_acc = compute_pixel_acc(pred_mask, v_tar)
+                    pixel_acc_list.append(p_acc)
+
             avg_miou = np.nanmean(miou_list) * 100
-            print(f"Validation mIoU: {avg_miou:.2f}% (Best: {best_miou:.2f}%)")
+            avg_pixel_acc = np.nanmean(pixel_acc_list) * 100
+            print(f"Validation mIoU: {avg_miou:.2f}% (Best: {best_miou:.2f}%) | Pixel Accuracy: {avg_pixel_acc:.2f}%")
 
             # Save Checkpoint
             torch.save(model.state_dict(), f"{model_save_path}/model_last.pt")
