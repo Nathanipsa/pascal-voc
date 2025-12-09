@@ -75,6 +75,16 @@ def compute_iou(pred, target, n_classes=21):
             ious.append(intersection / union)
     return np.nanmean(ious)
 
+def compute_pixel_acc(pred, target):
+    # On ignore le label 255 (bordures)
+    valid_mask = target != 255
+    correct = (pred[valid_mask] == target[valid_mask]).sum().item()
+    total = valid_mask.sum().item()
+    if total == 0:
+        return 0
+    return correct / total
+
+
 # --- VALIDATION ---
 def validate():
     # 1. Charger les données
@@ -137,6 +147,11 @@ def validate():
     print(f"RESULTAT FINAL (Public Test Set)")
     print(f"mIoU avec TTA : {final_miou:.4f}%")
     print("-" * 30)
+
+    # ... après le calcul du mIoU ...
+    p_acc = compute_pixel_acc(pred_mask, v_tar)
+    print(f"Pixel Acc: {p_acc * 100:.2f}%")
+
 
 if __name__ == "__main__":
     validate()
