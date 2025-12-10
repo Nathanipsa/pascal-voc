@@ -93,8 +93,6 @@ def validate():
     print(f"Images trouvées : {len(val_imgs)}")
 
     # 2. Charger le modèle
-    # ATTENTION : Assurez-vous que c'est la bonne architecture (Small_UNet + CBAM)
-    # Si vous n'avez pas réactivé CBAM dans network.py, commentez-le là-bas ou changez ici.
     print("Chargement du modèle...")
     model = fn.CBAM_UNet(n_channels=3, n_classes=num_classes).to(DEVICE)
     
