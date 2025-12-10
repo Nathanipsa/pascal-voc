@@ -13,10 +13,10 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Device: {DEVICE}")
 
 # Hyperparameters
-brestore = False
+brestore = True 
 restore_iter = 0
 num_training_steps = 10000
-learning_rate = 5e-3
+learning_rate = 1e-3
 weight_decay = 1e-2
 batch_size = 8
 accumulation_steps = 2
@@ -199,7 +199,7 @@ class DiceLoss(nn.Module):
         dice_part = (2. * intersection.sum(dim=(2, 3)) + smooth) / (
                     inputs.sum(dim=(2, 3)) + target.sum(dim=(2, 3)) + smooth)
 
-        # Dice Loss = 1 - Dice Score moyen
+        # Dice Loss = 1 - mean Dice Score 
         return 1 - dice_part.mean()
 
 

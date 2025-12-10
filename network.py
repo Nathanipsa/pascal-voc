@@ -69,6 +69,7 @@ class DoubleConvCBAM(nn.Module):
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True)
         )
+
         self.cbam = CBAM(out_channels)
 
     def forward(self, x):
@@ -116,7 +117,7 @@ class CBAM_UNet(nn.Module):
         # Convolution 1x1 to map to the number of classes
         self.outc = nn.Conv2d(64, n_classes, kernel_size=1)
 
-    def forward(self, x):
+    def _forward_single(self, x):
         # Encoding and saving residuals (skip connections)
         x1 = self.inc(x)
         x2 = self.down1(x1)
@@ -146,4 +147,21 @@ class CBAM_UNet(nn.Module):
         logits = self.outc(x)
         return logits
 
+    def forward(self, x):
+        # 1. Normal prediction
+        logits_normal = self._forward_single(x)
 
+        if not self.training:
+            # Horizontal Flip
+            x_flip = torch.flip(x, dims=[3])
+            
+            # Prediction on flipped image
+            logits_flip = self._forward_single(x_flip)
+            
+            # Flip the prediction back
+            logits_flip_back = torch.flip(logits_flip, dims=[3])
+            
+            # Average the two
+            return (logits_normal + logits_flip_back) / 2.0
+        
+        return logits_normal
